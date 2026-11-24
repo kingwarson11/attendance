@@ -22,15 +22,15 @@
   <section id="v1">
     <div class="card">
       <h2>Enter your Student ID</h2>
-      <p class="muted">Type your 8-digit reference number to get started</p>
-      <input id="sid" type="text" inputmode="numeric" maxlength="8" placeholder="e.g. 20012345" autocomplete="off">
+      <p class="muted">Type your Student ID to get started</p>
+      <input id="sid" type="text" inputmode="numeric" maxlength="12" placeholder="e.g. 10012300011" autocomplete="off">
       <div id="found" class="found hidden"></div>
       <div id="idErr" class="note err hidden" style="margin-top:12px"></div>
     </div>
     <div id="loc" class="note warn">📍 Getting your location…</div>
     <div class="note warn">📷 Next, a live selfie is taken automatically when you face the camera. Make sure your face is clearly visible.</div>
     <button id="go" disabled>Continue to selfie ›</button>
-    <p id="need" class="muted center" style="margin-top:10px">Still needed: your 8-digit ID</p>
+    <p id="need" class="muted center" style="margin-top:10px">Still needed: your Student ID</p>
   </section>
 
   <!-- Step 2 -->
@@ -93,7 +93,7 @@ function setStep(n){ [1,2,3].forEach(i => $("s"+i).classList.toggle("on", i <= n
 function sanity(){
   const ok = student && pos;
   $("go").disabled = !ok;
-  $("need").textContent = ok ? "" : "Still needed: " + [!student && "your 8-digit ID", !pos && "location"].filter(Boolean).join(" and ");
+  $("need").textContent = ok ? "" : "Still needed: " + [!student && "your Student ID", !pos && "location"].filter(Boolean).join(" and ");
 }
 
 // session
@@ -120,9 +120,9 @@ getLoc();
 
 // student lookup
 $("sid").addEventListener("input", async (e) => {
-  const v = e.target.value.replace(/\D/g, "").slice(0, 8); e.target.value = v;
+  const v = e.target.value.replace(/\D/g, "").slice(0, 12); e.target.value = v;
   student = null; $("found").classList.add("hidden"); $("idErr").classList.add("hidden"); sanity();
-  if (v.length !== 8) return;
+  if (v.length < 8) return;
   const r = await fetch("/api/public/student/" + v);
   if (!r.ok) { $("idErr").textContent = "Student ID not found."; $("idErr").classList.remove("hidden"); return; }
   student = { id: v, ...(await r.json()) };
