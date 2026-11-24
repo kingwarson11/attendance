@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ACity Attendance – Admin</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body class="lec">
+<div class="hero"><div class="brand"><div class="mark">AC</div><span>ACity Attendance · Admin</span><a href="/lecturer.html" style="margin-left:auto;color:#fff">← Lecturer</a></div><h1>Check attendance</h1></div>
+<main>
+  <section id="login" class="card">
+    <h2>Admin sign in</h2>
+    <label>Password</label><input id="pw" type="password">
+    <p id="lerr" class="muted" style="color:var(--err)"></p>
+    <button id="loginBtn">Sign in</button>
+  </section>
+
+  <div id="app" class="hidden">
+    <section class="card">
+      <h2>Look up a student</h2>
+      <p class="muted">Type an ID (e.g. 10012300011) or part of a name.</p>
+      <input id="q" type="search" placeholder="ID or name" autocomplete="off">
+      <div id="matches" style="margin-top:8px"></div>
+    </section>
+
+    <section id="studentCard" class="card hidden">
+      <h2 id="sName"></h2>
+      <p class="muted" id="sInfo"></p>
+      <h3 id="sCount"></h3>
+      <div style="overflow-x:auto"><table><thead><tr><th></th><th>Course</th><th>Date</th><th>Time</th><th>Dist</th></tr></thead><tbody id="sRows"></tbody></table></div>
+    </section>
+
+    <section class="card">
+      <h2>Sessions</h2>
+      <p class="muted">Pick a session to see who was present and who was absent.</p>
+      <div id="sessions">Loading…</div>
+    </section>
+
+    <section id="sessCard" class="card hidden">
+      <h2 id="ssTitle"></h2>
+      <div class="row" style="margin-bottom:10px"><button class="ghost sm" id="ssCsv">Download present (CSV)</button></div>
+      <h3 id="presentH"></h3>
+      <div style="overflow-x:auto"><table><thead><tr><th></th><th>ID</th><th>Name</th><th>Time</th></tr></thead><tbody id="pRows"></tbody></table></div>
+      <h3 id="absentH" style="margin-top:20px"></h3>
+      <div style="overflow-x:auto"><table><thead><tr><th>ID</th><th>Name</th><th>Programme</th></tr></thead><tbody id="aRows"></tbody></table></div>
+    </section>
+  </div>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const api = async (url) => { const r = await fetch(url); if (r.status === 401) { showLogin(); throw 0; } return r; };
+function showLogin(){ $("login").classList.remove("hidden"); $("app").classList.add("hidden"); }
+function showApp(){ $("login").classList.add("hidden"); $("app").classList.remove("hidden"); loadSessions(); }
+$("loginBtn").onclick = async () => {
+  const r = await fetch("/api/lecturer/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ password: $("pw").value }) });
+  if (r.ok) showApp(); else $("lerr").textContent = "Wrong password";
+};
+fetch("/api/lecturer/me").then(r => r.ok ? showApp() : showLogin());
+
+let t;
+$("q").addEventListener("input", () => { clearTimeout(t); t = setTimeout(search, 300); });
+async function search(){
+  const q = $("q").value.trim();
+  if (q.length < 2) { $("matches").innerHTML = ""; return; }
+  const list = await (await api("/api/admin/students?q=" + encodeURIComponent(q))).json();
+  $("matches").innerHTML = list.length ? list.map(s => `<div class="kv"><span>${esc(s.name)} · ${esc(s.id)}</span><span><a href="#" data-id="${esc(s.id)}">view</a></span></div>`).join("") : "<p class='muted'>No match.</p>";
+  $("matches").querySelectorAll("a").forEach(a => a.onclick = e => { e.preventDefault(); showStudent(a.dataset.id); });
+}
+async function showStudent(id){
+  const d = await (await api("/api/admin/student/" + id)).json();
+  $("studentCard").classList.remove("hidden");
+  $("sName").textContent = d.student.name;
+  $("sInfo").textContent = `${d.student.id} · ${d.student.programme || ""}${d.student.year ? " · Year " + d.student.year : ""}`;
+  $("sCount").textContent = `Attended ${d.records.length} session(s)`;
+  $("sRows").innerHTML = d.records.map(r => { const dt = new Date(r.time); return `<tr><td><img src="${r.selfie}"></td><td>${esc(r.course)}</td><td>${dt.toLocaleDateString("en-GB")}</td><td>${dt.toLocaleTimeString("en-GB")}</td><td>${r.distance}m</td></tr>`; }).join("");
+  $("studentCard").scrollIntoView({ behavior: "smooth" });
+}
+
+async function loadSessions(){
+  const list = await (await api("/api/sessions")).json();
+  $("sessions").innerHTML = list.length ? list.map(s => `<div class="kv"><span>${esc(s.course)} · ${new Date(s.createdAt).toLocaleString("en-GB")}</span><span><a href="#" data-id="${s.id}" data-t="${esc(s.course)}">view</a></span></div>`).join("") : "No sessions yet.";
+  $("sessions").querySelectorAll("a").forEach(a => a.onclick = e => { e.preventDefault(); showSession(a.dataset.id, a.dataset.t); });
+}
+async function showSession(id, title){
+  const [p, a] = await Promise.all([api(`/api/sessions/${id}/records`).then(r => r.json()), api(`/api/sessions/${id}/absent`).then(r => r.json())]);
+  $("sessCard").classList.remove("hidden"); $("ssTitle").textContent = title;
+  $("ssCsv").onclick = () => location.href = `/api/sessions/${id}/export.csv`;
+  $("presentH").textContent = `Present (${p.length})`;
+  $("pRows").innerHTML = p.map(r => `<tr><td><img src="${r.selfie}"></td><td>${esc(r.studentId)}</td><td>${esc(r.name)}</td><td>${new Date(r.time).toLocaleTimeString("en-GB")}</td></tr>`).join("");
+  $("absentH").textContent = `Absent (${a.length}) — based on the imported roster`;
+  $("aRows").innerHTML = a.map(s => `<tr><td>${esc(s.id)}</td><td>${esc(s.name)}</td><td>${esc(s.programme)}</td></tr>`).join("");
+  $("sessCard").scrollIntoView({ behavior: "smooth" });
+}
+</script>
+</body>
+</html>
