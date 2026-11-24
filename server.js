@@ -91,16 +91,15 @@ app.get("/api/sessions/:id/qr", requireLecturer, wrap(async (req, res) => {
 }));
 
 app.get("/api/sessions/:id/records", requireLecturer, wrap(async (req, res) => {
-  const snap = await db.collection("sessions").doc(req.params.id).collection("records").orderBy("time", "desc").get();
-  res.json(snap.docs.map((d) => d.data()));
+  const snap = await db.collection("attendance").where("sessionId", "==", req.params.id).get();
+  res.json(snap.docs.map((d) => d.data()).sort((a, b) => b.time - a.time));
 }));
 
 app.get("/api/sessions/:id/export.csv", requireLecturer, wrap(async (req, res) => {
-  const snap = await db.collection("sessions").doc(req.params.id).collection("records").orderBy("time").get();
+  const snap = await db.collection("attendance").where("sessionId", "==", req.params.id).get();
   const esc = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
   const rows = [["Student ID", "Name", "Programme", "Year", "Time", "Distance (m)"].join(",")];
-  snap.forEach((d) => {
-    const r = d.data();
+  snap.docs.map((d) => d.data()).sort((a, b) => a.time - b.time).forEach((r) => {
     rows.push([r.studentId, r.name, r.programme, r.year, new Date(r.time).toISOString(), r.distance].map(esc).join(","));
   });
   res.setHeader("Content-Type", "text/csv");
@@ -116,7 +115,7 @@ app.post("/api/students/import", requireLecturer, wrap(async (req, res) => {
     const batch = db.batch();
     for (const s of list.slice(i, i + 400)) {
       const id = String(s.id || "").trim();
-      if (!/^\d{8}$/.test(id)) continue;
+      if (!/^\d{8,12}$/.test(id)) continue;
       batch.set(db.collection("students").doc(id), {
         name: String(s.name || "").trim(),
         programme: String(s.programme || "").trim(),
@@ -129,6 +128,32 @@ app.post("/api/students/import", requireLecturer, wrap(async (req, res) => {
   res.json({ imported: n });
 }));
 
+// ---------- admin: check attendance ----------
+app.get("/api/admin/students", requireLecturer, wrap(async (req, res) => {
+  const q = String(req.query.q || "").trim().toLowerCase();
+  if (q.length < 2) return res.json([]);
+  const snap = await db.collection("students").limit(5000).get();
+  res.json(snap.docs.map((d) => ({ id: d.id, ...d.data() }))
+    .filter((s) => s.id.startsWith(q) || (s.name || "").toLowerCase().includes(q)).slice(0, 20));
+}));
+
+app.get("/api/admin/student/:id", requireLecturer, wrap(async (req, res) => {
+  const stu = await db.collection("students").doc(req.params.id).get();
+  if (!stu.exists) return res.status(404).json({ error: "Student not found" });
+  const snap = await db.collection("attendance").where("studentId", "==", req.params.id).get();
+  const records = snap.docs.map((d) => d.data()).sort((a, b) => b.time - a.time);
+  res.json({ student: { id: stu.id, ...stu.data() }, records });
+}));
+
+app.get("/api/sessions/:id/absent", requireLecturer, wrap(async (req, res) => {
+  const [present, all] = await Promise.all([
+    db.collection("attendance").where("sessionId", "==", req.params.id).get(),
+    db.collection("students").limit(5000).get(),
+  ]);
+  const here = new Set(present.docs.map((d) => d.data().studentId));
+  res.json(all.docs.filter((d) => !here.has(d.id)).map((d) => ({ id: d.id, ...d.data() })));
+}));
+
 // ---------- student-facing ----------
 app.get("/api/public/session/:id", wrap(async (req, res) => {
   const d = await db.collection("sessions").doc(req.params.id).get();
@@ -139,7 +164,7 @@ app.get("/api/public/session/:id", wrap(async (req, res) => {
 }));
 
 app.get("/api/public/student/:id", wrap(async (req, res) => {
-  if (!/^\d{8}$/.test(req.params.id)) return res.status(400).json({ error: "Invalid ID" });
+  if (!/^\d{8,12}$/.test(req.params.id)) return res.status(400).json({ error: "Invalid ID" });
   const d = await db.collection("students").doc(req.params.id).get();
   if (!d.exists) return res.status(404).json({ error: "Student not found" });
   res.json(d.data());
@@ -147,7 +172,7 @@ app.get("/api/public/student/:id", wrap(async (req, res) => {
 
 app.post("/api/public/attend", wrap(async (req, res) => {
   const { sessionId, studentId, lat, lng, accuracy, selfie } = req.body;
-  if (!sessionId || !/^\d{8}$/.test(String(studentId)) || typeof lat !== "number" || typeof lng !== "number")
+  if (!sessionId || !/^\d{8,12}$/.test(String(studentId)) || typeof lat !== "number" || typeof lng !== "number")
     return res.status(400).json({ error: "Missing or invalid details." });
   if (typeof selfie !== "string" || !selfie.startsWith("data:image/jpeg;base64,") || selfie.length > 400000)
     return res.status(400).json({ error: "A clear selfie is required." });
@@ -166,14 +191,16 @@ app.post("/api/public/attend", wrap(async (req, res) => {
   if (dist > allowed)
     return res.status(403).json({ error: `You appear to be about ${dist}m from the classroom. You must be in the classroom to sign attendance.`, code: "TOO_FAR" });
 
-  const rRef = sRef.collection("records").doc(String(studentId));
+  const rRef = db.collection("attendance").doc(`${sessionId}_${studentId}`);
   const time = Date.now();
   try {
-    await rRef.create({ studentId: String(studentId), ...stu.data(), time, distance: dist, selfie });
+    await rRef.create({ sessionId, course: s.course, studentId: String(studentId), ...stu.data(), time, distance: dist, selfie });
   } catch (e) {
     return res.status(409).json({ error: "Attendance already recorded for this ID." });
   }
   res.json({ ok: true, studentId, ...stu.data(), time, selfie });
 }));
 
-app.listen(process.env.PORT || 3000, () => console.log("ACity Attendance running"));
+// On Vercel the app is exported as a serverless handler; elsewhere it listens normally.
+if (!process.env.VERCEL) app.listen(process.env.PORT || 3000, () => console.log("ACity Attendance running"));
+module.exports = app;
