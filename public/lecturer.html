@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ACity Attendance – Lecturer</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body class="lec">
+<div class="hero"><div class="brand"><div class="mark">AC</div><span>ACity Attendance · Lecturer</span></div><h1>Lecturer dashboard</h1></div>
+<main>
+  <section id="login" class="card">
+    <h2>Sign in</h2>
+    <label>Password</label><input id="pw" type="password">
+    <p id="lerr" class="muted" style="color:var(--err)"></p>
+    <button id="loginBtn">Sign in</button>
+  </section>
+
+  <div id="app" class="hidden">
+    <section class="card">
+      <h2>New attendance session</h2>
+      <p class="muted">Stand in the classroom — your current location becomes the classroom centre.</p>
+      <label>Course / class</label><input id="course" type="text" placeholder="e.g. CS201 – Data Structures">
+      <div class="row">
+        <div style="flex:1"><label>Radius (m)</label><input id="radius" type="number" value="100"></div>
+        <div style="flex:1"><label>Open for (minutes)</label><input id="mins" type="number" value="30"></div>
+      </div>
+      <p id="where" class="muted" style="margin-top:10px"></p>
+      <button id="create">Start session &amp; show QR</button>
+    </section>
+
+    <section id="live" class="card hidden center">
+      <h2 id="liveTitle"></h2>
+      <p class="muted">Project this QR code. Students scan it with their phone camera.</p>
+      <img id="qr" class="qr">
+      <p class="muted" id="url" style="word-break:break-all"></p>
+      <div class="row"><button class="ghost" id="refreshRec">Refresh list</button><button class="ghost" id="csv">Download CSV</button><button id="close">Close session</button></div>
+      <h3 id="count"></h3>
+      <div style="overflow-x:auto"><table><thead><tr><th></th><th>ID</th><th>Name</th><th>Time</th><th>Dist</th></tr></thead><tbody id="rows"></tbody></table></div>
+    </section>
+
+    <section class="card">
+      <h2>Past sessions</h2>
+      <div id="past" class="muted">Loading…</div>
+    </section>
+
+    <section class="card">
+      <h2>Import student roster</h2>
+      <p class="muted">One student per line: <code>ID,Name,Programme,Year</code> (ID must be 8 digits)</p>
+      <textarea id="roster" rows="6" placeholder="20012345,MENSAH, Ama,BSc. Computer Engineering,3"></textarea>
+      <button id="imp" style="margin-top:10px">Import students</button>
+      <p id="impMsg" class="muted"></p>
+    </section>
+  </div>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+let here = null, current = null;
+const api = async (url, opts) => { const r = await fetch(url, opts); if (r.status === 401) { showLogin(); throw 0; } return r; };
+const post = (url, body) => api(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+function showLogin(){ $("login").classList.remove("hidden"); $("app").classList.add("hidden"); }
+function showApp(){ $("login").classList.add("hidden"); $("app").classList.remove("hidden"); locate(); loadPast(); }
+
+$("loginBtn").onclick = async () => {
+  const r = await fetch("/api/lecturer/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ password: $("pw").value }) });
+  if (r.ok) showApp(); else $("lerr").textContent = "Wrong password";
+};
+fetch("/api/lecturer/me").then(r => r.ok ? showApp() : showLogin());
+
+function locate(){
+  $("where").textContent = "📍 Getting your location…";
+  navigator.geolocation.getCurrentPosition(p => {
+    here = { lat: p.coords.latitude, lng: p.coords.longitude };
+    $("where").textContent = `📍 Classroom centre set (±${Math.round(p.coords.accuracy)}m accuracy)`;
+  }, () => { $("where").textContent = "📍 Location blocked — allow it to create a session."; }, { enableHighAccuracy: true, timeout: 20000 });
+}
+
+$("create").onclick = async () => {
+  if (!here) return alert("Waiting for your location.");
+  if (!$("course").value.trim()) return alert("Enter a course name.");
+  const r = await post("/api/sessions", { course: $("course").value, lat: here.lat, lng: here.lng, radius: +$("radius").value, minutes: +$("mins").value });
+  const { id } = await r.json(); openSession(id, $("course").value);
+};
+
+async function openSession(id, title){
+  current = id; $("live").classList.remove("hidden"); $("liveTitle").textContent = title;
+  const q = await (await api(`/api/sessions/${id}/qr`)).json();
+  $("qr").src = q.qr; $("url").textContent = q.url;
+  loadRecords(); window.scrollTo({ top: $("live").offsetTop - 10, behavior: "smooth" });
+  loadPast();
+}
+async function loadRecords(){
+  const list = await (await api(`/api/sessions/${current}/records`)).json();
+  $("count").textContent = `${list.length} present`;
+  $("rows").innerHTML = list.map(r => `<tr><td><img src="${r.selfie}"></td><td>${esc(r.studentId)}</td><td>${esc(r.name)}</td><td>${new Date(r.time).toLocaleTimeString("en-GB")}</td><td>${r.distance}m</td></tr>`).join("");
+}
+$("refreshRec").onclick = loadRecords;
+$("csv").onclick = () => location.href = `/api/sessions/${current}/export.csv`;
+$("close").onclick = async () => { await post(`/api/sessions/${current}/close`, {}); loadPast(); alert("Session closed."); };
+
+async function loadPast(){
+  const list = await (await api("/api/sessions")).json();
+  $("past").innerHTML = list.length ? list.map(s => `<div class="kv"><span>${esc(s.course)} · ${new Date(s.createdAt).toLocaleString("en-GB")}${s.closed || Date.now() > s.expiresAt ? "" : " · <b style='color:var(--ok)'>open</b>"}</span><span><a href="#" data-id="${s.id}" data-t="${esc(s.course)}">open</a></span></div>`).join("") : "No sessions yet.";
+  $("past").querySelectorAll("a").forEach(a => a.onclick = (e) => { e.preventDefault(); openSession(a.dataset.id, a.dataset.t); });
+}
+
+$("imp").onclick = async () => {
+  const students = $("roster").value.split("\n").map(l => l.trim()).filter(Boolean).map(l => {
+    const p = l.split(","); const id = p.shift(); const year = p.pop(); const programme = p.pop(); return { id, name: p.join(","), programme, year };
+  });
+  const r = await post("/api/students/import", { students });
+  $("impMsg").textContent = `Imported ${(await r.json()).imported} students.`;
+};
+</script>
+</body>
+</html>

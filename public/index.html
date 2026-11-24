@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ACity Attendance</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="hero">
+  <div class="brand"><div class="mark">AC</div><span id="course">ACity Attendance</span></div>
+  <h1>Sign your attendance</h1>
+  <p>Complete all steps to record your presence</p>
+  <div class="steps" id="steps">
+    <div class="on" id="s1" style="display:flex;align-items:center"><div class="dot">1</div><span class="l">Details</span></div><div class="line"></div>
+    <div id="s2" style="display:flex;align-items:center"><div class="dot">2</div><span class="l">Selfie</span></div><div class="line"></div>
+    <div id="s3" style="display:flex;align-items:center"><div class="dot">3</div><span class="l">Submit</span></div>
+  </div>
+</div>
+<main>
+  <!-- Step 1 -->
+  <section id="v1">
+    <div class="card">
+      <h2>Enter your Student ID</h2>
+      <p class="muted">Type your 8-digit reference number to get started</p>
+      <input id="sid" type="text" inputmode="numeric" maxlength="8" placeholder="e.g. 20012345" autocomplete="off">
+      <div id="found" class="found hidden"></div>
+      <div id="idErr" class="note err hidden" style="margin-top:12px"></div>
+    </div>
+    <div id="loc" class="note warn">📍 Getting your location…</div>
+    <div class="note warn">📷 Next, a live selfie is taken automatically when you face the camera. Make sure your face is clearly visible.</div>
+    <button id="go" disabled>Continue to selfie ›</button>
+    <p id="need" class="muted center" style="margin-top:10px">Still needed: your 8-digit ID</p>
+  </section>
+
+  <!-- Step 2 -->
+  <section id="v2" class="hidden">
+    <div class="card center">
+      <h2 id="camTitle">Face the camera</h2>
+      <p class="muted" id="camSub">Hold the phone <b>close to your face</b> — the photo is taken <b>automatically</b></p>
+      <div class="ring"><video id="vid" playsinline muted autoplay></video><img id="shot" class="hidden"></div>
+      <p id="camStatus" class="muted"><b>Looking for your face…</b></p>
+      <p class="muted" style="font-size:12px" id="camHint">Good light on your face · remove caps &amp; dark glasses</p>
+      <button class="ghost" id="manual">📷 Take photo manually</button>
+      <button class="ghost hidden" id="retake">↻ Retake</button>
+    </div>
+  </section>
+
+  <!-- Step 3 -->
+  <section id="v3" class="hidden">
+    <div class="card center"><div class="spin"></div><b>Recording your attendance…</b></div>
+  </section>
+
+  <!-- Done -->
+  <section id="vok" class="hidden">
+    <div class="card center">
+      <div class="big-ok">✓</div>
+      <h2 style="font-size:26px">Attendance recorded!</h2>
+      <p class="muted">Your attendance has been successfully captured.</p>
+      <img id="okImg" class="avatar">
+      <div class="kv"><span>Name</span><span id="okName"></span></div>
+      <div class="kv"><span>Student ID</span><span id="okId"></span></div>
+      <div class="kv"><span>Programme</span><span id="okProg"></span></div>
+      <div class="kv"><span>Time</span><span id="okTime"></span></div>
+    </div>
+    <p class="muted center">You may close this page.</p>
+  </section>
+
+  <!-- Error -->
+  <section id="verr" class="hidden center">
+    <div style="font-size:54px;margin-top:30px">⚠️</div>
+    <h2>Could not record attendance</h2>
+    <p id="errMsg" style="color:var(--err);font-size:15px"></p>
+    <div id="gpsTips" class="note warn hidden" style="text-align:left;display:block">
+      GPS fix may be inaccurate indoors. Try these steps:<br>
+      1. Move closer to a window or doorway<br>2. Turn Wi-Fi on (helps GPS accuracy)<br>
+      3. Tap “Refresh GPS” below, wait for a new fix<br>4. Then tap “Try again”
+    </div>
+    <div class="row" style="justify-content:center">
+      <button class="sm" id="refresh">📍 Refresh GPS</button>
+      <button class="sm ghost" id="again">Try again</button>
+    </div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const sessionId = new URLSearchParams(location.search).get("s");
+let student = null, pos = null, selfie = null, stream = null, timer = null, submitTimer = null;
+
+function show(id){ ["v1","v2","v3","vok","verr"].forEach(v => $(v).classList.toggle("hidden", v !== id)); }
+function setStep(n){ [1,2,3].forEach(i => $("s"+i).classList.toggle("on", i <= n)); }
+function sanity(){
+  const ok = student && pos;
+  $("go").disabled = !ok;
+  $("need").textContent = ok ? "" : "Still needed: " + [!student && "your 8-digit ID", !pos && "location"].filter(Boolean).join(" and ");
+}
+
+// session
+(async () => {
+  if (!sessionId) { $("idErr").textContent = "Scan the QR code shown by your lecturer."; $("idErr").classList.remove("hidden"); return; }
+  const r = await fetch("/api/public/session/" + sessionId);
+  if (!r.ok) { $("idErr").textContent = "Invalid attendance link."; $("idErr").classList.remove("hidden"); return; }
+  const s = await r.json();
+  $("course").textContent = s.course;
+  if (!s.open) { $("idErr").textContent = "This attendance session has closed."; $("idErr").classList.remove("hidden"); $("sid").disabled = true; }
+})();
+
+// location
+function getLoc(){
+  $("loc").className = "note warn"; $("loc").textContent = "📍 Getting your location…";
+  navigator.geolocation.getCurrentPosition(p => {
+    pos = { lat: p.coords.latitude, lng: p.coords.longitude, accuracy: p.coords.accuracy };
+    $("loc").className = "note ok"; $("loc").textContent = `📍 Location confirmed — accurate to ±${Math.round(pos.accuracy)}m`; sanity();
+  }, () => {
+    pos = null; $("loc").className = "note err"; $("loc").textContent = "📍 Location blocked. Allow location access in your browser settings, then refresh."; sanity();
+  }, { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 });
+}
+getLoc();
+
+// student lookup
+$("sid").addEventListener("input", async (e) => {
+  const v = e.target.value.replace(/\D/g, "").slice(0, 8); e.target.value = v;
+  student = null; $("found").classList.add("hidden"); $("idErr").classList.add("hidden"); sanity();
+  if (v.length !== 8) return;
+  const r = await fetch("/api/public/student/" + v);
+  if (!r.ok) { $("idErr").textContent = "Student ID not found."; $("idErr").classList.remove("hidden"); return; }
+  student = { id: v, ...(await r.json()) };
+  $("found").innerHTML = `<small>STUDENT FOUND</small><b>${esc(student.name)}</b><div>${esc(student.programme)}</div><div class="muted">${student.year ? "Year " + esc(student.year) : ""}</div>`;
+  $("found").classList.remove("hidden"); sanity();
+});
+function esc(s){ return String(s||"").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+
+// camera
+$("go").onclick = startCamera;
+async function startCamera(){
+  show("v2"); setStep(2); selfie = null;
+  $("shot").classList.add("hidden"); $("vid").classList.remove("hidden"); $("retake").classList.add("hidden"); $("manual").classList.remove("hidden");
+  $("camTitle").textContent = "Face the camera"; $("camStatus").innerHTML = "<b>Looking for your face…</b>";
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user", width: 640, height: 640 }, audio: false });
+  } catch { return fail("Camera access is required to sign attendance. Allow the camera and try again."); }
+  $("vid").srcObject = stream; await $("vid").play().catch(()=>{});
+  autoCapture();
+}
+async function autoCapture(){
+  const useDetector = "FaceDetector" in window;
+  const detector = useDetector ? new FaceDetector({ fastMode: true, maxDetectedFaces: 1 }) : null;
+  let hits = 0, ticks = 0;
+  timer = setInterval(async () => {
+    ticks++;
+    try {
+      if (detector) {
+        const f = await detector.detect($("vid"));
+        hits = f.length ? hits + 1 : 0;
+        if (hits >= 3) { clearInterval(timer); capture(); }
+      } else if (ticks >= 6) { // browsers without FaceDetector: capture after ~3s hold
+        clearInterval(timer); capture();
+      }
+    } catch { /* ignore */ }
+  }, 500);
+}
+$("manual").onclick = () => { clearInterval(timer); capture(); };
+$("retake").onclick = () => { clearTimeout(submitTimer); startCamera(); };
+function stopCam(){ clearInterval(timer); if (stream) stream.getTracks().forEach(t => t.stop()); stream = null; }
+function capture(){
+  const v = $("vid"), size = 360, c = document.createElement("canvas");
+  c.width = c.height = size;
+  const s = Math.min(v.videoWidth, v.videoHeight);
+  c.getContext("2d").drawImage(v, (v.videoWidth - s)/2, (v.videoHeight - s)/2, s, s, 0, 0, size, size);
+  selfie = c.toDataURL("image/jpeg", 0.7);
+  stopCam();
+  $("shot").src = selfie; $("shot").classList.remove("hidden"); $("vid").classList.add("hidden");
+  $("manual").classList.add("hidden"); $("retake").classList.remove("hidden");
+  $("camTitle").textContent = "Photo captured";
+  let n = 3; $("camStatus").innerHTML = `<b style="color:var(--brand)">Submitting automatically in ${n}…</b>`;
+  $("camHint").textContent = "You don't need to press anything. Tap Retake only if the photo is unclear.";
+  const tick = () => { n--; if (n <= 0) return submit(); $("camStatus").innerHTML = `<b style="color:var(--brand)">Submitting automatically in ${n}…</b>`; submitTimer = setTimeout(tick, 1000); };
+  submitTimer = setTimeout(tick, 1000);
+}
+
+// submit
+async function submit(){
+  show("v3"); setStep(3);
+  const r = await fetch("/api/public/attend", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sessionId, studentId: student.id, lat: pos.lat, lng: pos.lng, accuracy: pos.accuracy, selfie })
+  }).catch(() => null);
+  if (!r) return fail("Network error. Check your connection and try again.");
+  const d = await r.json();
+  if (!r.ok) return fail(d.error, d.code === "TOO_FAR");
+  $("okImg").src = d.selfie; $("okName").textContent = d.name; $("okId").textContent = d.studentId; $("okProg").textContent = d.programme;
+  $("okTime").textContent = new Date(d.time).toLocaleTimeString("en-GB");
+  show("vok");
+}
+function fail(msg, gps){
+  stopCam(); $("errMsg").textContent = msg;
+  $("gpsTips").classList.toggle("hidden", !gps); $("refresh").classList.toggle("hidden", !gps);
+  show("verr");
+}
+$("again").onclick = () => { show("v1"); setStep(1); sanity(); };
+$("refresh").onclick = () => { getLoc(); show("v1"); setStep(1); };
+</script>
+</body>
+</html>
